@@ -21,7 +21,7 @@ from flax.core import freeze
 from flax.training import train_state
 from flax import traverse_util
 
-@dataclass
+@dataclass(frozen=True)
 class GPTConfig:
     block_size: int = 1024
     vocab_size: int = 50257
@@ -53,13 +53,14 @@ class CausalSelfAttention(nn.Module):
         B, T, C = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k ,v  = self.c_attn(x).split(3, axis=-1)
+        qkv = self.c_attn(x)
+        q, k, v = jnp.split(qkv, 3, axis=-1)
         q = q.reshape(B, T, self.n_head, C // self.n_head).swapaxes(1, 2) # (B, nh, T, hs)
         k = k.reshape(B, T, self.n_head, C // self.n_head).swapaxes(1, 2) # (B, nh, T, hs)
         v = v.reshape(B, T, self.n_head, C // self.n_head).swapaxes(1, 2) # (B, nh, T, hs)
 
         mask = jnp.tril(jnp.ones((T, T))).reshape((1, 1, T, T))
-        
+
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         att = (q @ k.swapaxes(-2, -1)) * (1.0 / jnp.sqrt(k.shape[-1]))
         att = jnp.where(mask == 0, float('-inf'), att)
@@ -145,7 +146,7 @@ class GPT(nn.Module):
         # model surgery to decrease the block size if necessary
         # e.g. we may load the GPT2 pretrained model checkpoint (block size 1024)
         # but want to use a smaller block size for some smaller, simpler model
-        
+
 
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
@@ -157,7 +158,7 @@ class GPT(nn.Module):
             return x
 
         return freeze(path_aware_map(crop_weights, params))
-        
+
 
     @classmethod
     def from_pretrained(cls, model_type, override_args=None):
@@ -189,7 +190,7 @@ class GPT(nn.Module):
             jax.random.PRNGKey(0), jnp.ones((1, 1), dtype=jnp.int32), train=False))
         params = variables['params']
         flat_params = traverse_util.flatten_dict(params, sep='.')
-        
+
 
         # init a huggingface/transformers model
         model_hf = GPT2LMHeadModel.from_pretrained(model_type)
@@ -246,7 +247,7 @@ class GPT(nn.Module):
             return optax.adamw(
                 learning_rate=learning_rate, b1=betas[0], b2=betas[1],
                 weight_decay=decay)
-        
+
         def partition_fn(path: Tuple[str, ...], x) -> str:
             if path[-1] in ('bias', 'scale', 'embedding'):
                 return 'no_decay'
@@ -255,8 +256,8 @@ class GPT(nn.Module):
             else:
                 raise ValueError(f"Unrecognized parameter: {path}")
 
-        partition_optimizers = {    
-            'decay': get_optimizer(weight_decay), 
+        partition_optimizers = {
+            'decay': get_optimizer(weight_decay),
             'no_decay': get_optimizer(0.0)}
         param_partitions = freeze(path_aware_map(partition_fn, params))
         tx = optax.multi_transform(partition_optimizers, param_partitions)
@@ -304,9 +305,9 @@ class GPT(nn.Module):
         tokens, _ = jax.lax.scan(scan_f, tokens, indexes)
 
         return tokens
-    
+
     def create_state(
-        self, learning_rate, weight_decay, beta1, beta2, 
+        self, learning_rate, weight_decay, beta1, beta2,
         decay_lr=None, warmup_iters=None, lr_decay_iters=None, min_lr=None,
         params=None,
         **kwargs
