@@ -1,5 +1,7 @@
 import jax
+from jax import export
 import jax.numpy as jnp
+
 from jax.lib import xla_client
 
 from model import GPTConfig, GPT
@@ -13,11 +15,21 @@ def main():
 
     def model2(x):
         return model.apply(params, x, train=False)
-    compiled = jax.jit(model2).lower(x)
+    jitted = jax.jit(model2)
+    compiled = jitted.lower(x)
     hlo_text = compiled.compiler_ir(dialect="hlo").as_hlo_text()
 
     # Save to file
     with open("nanogpt.hlo", "w") as f:
         f.write(hlo_text)
+
+    # https://jax.readthedocs.io/en/latest/export/export.html
+    exp = export.export(jitted)(x)
+    stablehlo_text = exp.mlir_module()
+    stablehlo_bytecode = exp.serialize()
+    with open("nanogpt.stablehlo.txt", "w") as f:
+        f.write(stablehlo_text)
+    with open("nanogpt.stablehlo", "wb") as f:
+        f.write(stablehlo_bytecode)
 
 main()
